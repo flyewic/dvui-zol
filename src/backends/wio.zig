@@ -334,6 +334,16 @@ pub fn main(main_init: std.process.Init) !void {
         while (events.pop()) |event| _ = try dvui_wio.addEvent(&win, event);
 
         const time = win.beginWait(true);
+
+        // Application rendering hook: begin the Vulkan frame (render pass /
+        // dynamic-rendering scope) so the app can record its own commands
+        // before DVUI's draw. `win.begin` below appends DVUI on top.
+        if (comptime dvui.render_backend.kind == .vulkan) {
+            if (try renderer.beginApplicationFrame(dvui_wio.pixelSize())) |frame| {
+                if (app.renderFn) |renderFn| try renderFn(@ptrCast(&frame));
+            }
+        }
+
         try win.begin(time);
         renderer.clear();
         const res = try app.frameFn();
