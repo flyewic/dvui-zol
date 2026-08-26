@@ -30,6 +30,13 @@ deinitFn: ?fn (*dvui.Window) void = null,
 /// Returns whether the app should continue running or close.
 frameFn: frameFunction,
 
+/// Optional callback to record application rendering (e.g. custom shaders)
+/// before DVUI's draw each frame. Called by backends that support it (wio +
+/// Vulkan) after the render pass / dynamic-rendering scope has begun but before
+/// `Window.begin`. The argument is backend-specific; the Vulkan backend passes
+/// a `*dvui.render_backend.ApplicationFrame`.
+renderFn: ?*const fn (frame: *anyopaque) anyerror!void = null,
+
 /// The init arg passed into main.  null if not available (like on web).
 pub var main_init: ?std.process.Init = null;
 
