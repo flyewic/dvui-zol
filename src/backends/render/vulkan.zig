@@ -28,7 +28,7 @@ pub const ResourceAllocator = Renderer.ResourceAllocator;
 pub const VkMemory = Renderer.VkMemory;
 pub const GpuAllocator = Renderer.GpuAllocator;
 
-const frames_in_flight = 2;
+pub const frames_in_flight = 2;
 
 pub const RenderingMode = enum {
     render_pass,
@@ -209,6 +209,7 @@ pending_present: bool = false,
 current_image: u32 = 0,
 current_slot: usize = 0,
 readback_submit_context: ?*ReadbackSubmitContext = null,
+overlay_callback: ?*const fn (frame: *anyopaque) anyerror!void = null,
 
 pub fn init(allocator: std.mem.Allocator, window: *wio.Window, options: InitOptions) !@This() {
     const owned = blk: {
@@ -456,6 +457,22 @@ pub fn vulkanContext(self: *const @This()) VulkanContext {
     };
 }
 
+/// Build an `ApplicationFrame` for the frame currently being recorded. Used to
+/// invoke the overlay callback from `endInternal` after DVUI's draw.
+fn currentApplicationFrame(self: *const @This()) ApplicationFrame {
+    return .{
+        .device = self.device,
+        .command_buffer = self.slots[self.current_slot].command_buffer,
+        .rendering_target = self.renderingTarget(),
+        .render_pass = self.render_pass,
+        .extent = self.extent,
+        .image = self.images[self.current_image],
+        .image_view = self.image_views[self.current_image],
+        .image_index = self.current_image,
+        .swapchain_generation = self.swapchain_generation,
+    };
+}
+
 pub fn swapchainGeneration(self: *const @This()) u64 {
     return self.swapchain_generation;
 }
@@ -579,6 +596,10 @@ fn endInternal(self: *@This()) !void {
         self.previous_stats = self.renderer.statsSnapshot();
         break :blk frame;
     } else Renderer.RecordedFrame{ .prepass = null, .main = slot.command_buffer };
+    if (self.overlay_callback) |cb| {
+        var af = self.currentApplicationFrame();
+        try cb(@ptrCast(&af));
+    }
     switch (self.rendering_mode) {
         .render_pass => self.device.cmdEndRenderPass(slot.command_buffer),
         .dynamic => {
@@ -724,6 +745,10 @@ pub fn textureDestroyTarget(self: *@This(), texture: dvui.Texture.Target) void {
 
 pub fn textureFromTarget(self: *@This(), texture: dvui.TextureTarget) dvui.Backend.TextureError!dvui.Texture {
     return self.renderer.textureFromTarget(texture);
+}
+
+pub fn textureTargetImageView(self: *@This(), texture: dvui.TextureTarget) vk.ImageView {
+    return self.renderer.targetImageView(texture);
 }
 
 pub fn textureFromTargetTemp(_: *@This(), texture: dvui.TextureTarget) dvui.Backend.TextureError!dvui.Texture {

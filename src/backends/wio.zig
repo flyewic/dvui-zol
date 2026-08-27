@@ -311,6 +311,10 @@ pub fn main(main_init: std.process.Init) !void {
     };
     defer renderer.deinit();
 
+    if (comptime dvui.render_backend.kind == .vulkan) {
+        renderer.overlay_callback = app.renderFnOver;
+    }
+
     var dvui_wio = try @This().init(.{ .io = io, .window = window });
     defer dvui_wio.deinit();
 
@@ -340,7 +344,7 @@ pub fn main(main_init: std.process.Init) !void {
         // before DVUI's draw. `win.begin` below appends DVUI on top.
         if (comptime dvui.render_backend.kind == .vulkan) {
             if (try renderer.beginApplicationFrame(dvui_wio.pixelSize())) |frame| {
-                if (app.renderFn) |renderFn| try renderFn(@ptrCast(&frame));
+                if (app.renderFn) |renderFn| try renderFn(@ptrCast(@constCast(&frame)));
             }
         }
 

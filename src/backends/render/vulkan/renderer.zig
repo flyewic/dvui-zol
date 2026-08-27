@@ -1376,6 +1376,16 @@ pub fn textureFromTarget(self: *Backend, texture_target: dvui.TextureTarget) dvu
     return dvui.Texture.cast(texture_target);
 }
 
+/// The `VkImageView` backing a texture target made with `textureCreateTarget`.
+/// Exposed so applications can sample a render target in their own pipelines
+/// (e.g. a full-frame post-process). The view is in `shader_read_only_optimal`
+/// layout once the target has been finished with `renderTarget`/`finishPrepass`.
+pub fn targetImageView(self: *Backend, texture: dvui.TextureTarget) vk.ImageView {
+    _ = self; // autofix
+    const tex: *Texture = @ptrCast(@alignCast(texture.ptr));
+    return tex.img_view;
+}
+
 pub fn renderTarget(self: *Backend, dvui_texture_target: ?dvui.TextureTarget) GenericError!void {
     if (!self.frame_active) return error.BackendError;
     const requested_texture: ?*Texture = if (dvui_texture_target) |t| @ptrCast(@alignCast(t.ptr)) else null;
