@@ -37,6 +37,14 @@ frameFn: frameFunction,
 /// a `*dvui.render_backend.ApplicationFrame`.
 renderFn: ?*const fn (frame: *anyopaque) anyerror!void = null,
 
+/// Optional callback to record application rendering *after* DVUI's draw each
+/// frame (overlay / post-process effects like cursor trails). Called by
+/// backends that support it (wio + Vulkan) after DVUI has recorded its draw
+/// commands but before the render pass ends and the command buffer is
+/// submitted. The argument is backend-specific; the Vulkan backend passes a
+/// `*dvui.render_backend.ApplicationFrame`.
+renderFnOver: ?*const fn (frame: *anyopaque) anyerror!void = null,
+
 /// The init arg passed into main.  null if not available (like on web).
 pub var main_init: ?std.process.Init = null;
 
