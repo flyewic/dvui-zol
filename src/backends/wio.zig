@@ -216,6 +216,14 @@ pub fn addEvent(self: *@This(), win: *dvui.Window, event: wio.Event) !bool {
             self.scale = scale;
             return false;
         },
+        .mode => |mode| {
+            win.window_state = switch (mode) {
+                .normal => .normal,
+                .maximized => .maximize,
+                .fullscreen => .fullscreen,
+            };
+            return false;
+        },
         .modifiers => |modifiers| {
             self.mod = .none;
             if (modifiers.shift) self.mod.combine(.lshift);
@@ -321,6 +329,7 @@ pub fn main(main_init: std.process.Init) !void {
         .title = config.title,
         .size = .{ .width = @trunc(config.size.w), .height = @trunc(config.size.h) },
         .scale = 1,
+        .transparent = config.transparent,
         .gl_options = gl_options,
     });
     defer window.destroy();
@@ -340,6 +349,7 @@ pub fn main(main_init: std.process.Init) !void {
         .vulkan => try dvui.render_backend.init(gpa, &window, .{
             .size_physical = .{ .w = config.size.w, .h = config.size.h },
             .vsync = config.vsync,
+            .transparent = config.transparent,
         }),
         else => @compileError("unsupported renderer for wio backend"),
     };
