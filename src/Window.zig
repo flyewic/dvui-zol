@@ -52,6 +52,10 @@ mouse_type_last_wheel_ns: i128 = 0,
 modifiers: dvui.enums.Mod = .none,
 inject_motion_event: bool = false,
 
+/// Last window state reported by the backend (`stateSet` / backend mode
+/// events). Apps can read this to adapt client-side decorations.
+window_state: dvui.enums.WindowState = .normal,
+
 dragging: dvui.Dragging = .{},
 
 /// Press-and-hold duration before a context menu opens from touch or long click.

@@ -67,6 +67,9 @@ pub const DeviceSelector = struct {
 pub const InitOptions = struct {
     size_physical: dvui.Size.Physical = .{ .w = 640, .h = 480 },
     vsync: bool = true,
+    /// Create a swapchain whose composite alpha supports a transparent
+    /// window (client-side rounded corners / shadows).
+    transparent: bool = false,
     vk_alloc: ?*vk.AllocationCallbacks = null,
     /// Maximum number of indices that can be submitted in a single frame.
     max_indices_per_frame: u32 = 1024 * 256,
@@ -198,9 +201,10 @@ render_pass: vk.RenderPass,
 renderer: Renderer,
 preferred_formats: []vk.Format,
 swapchain_image_usage: vk.ImageUsageFlags,
-depth_format: ?vk.Format,
-swapchain_generation: u64 = 0,
-vsync: bool,
+    depth_format: ?vk.Format,
+    swapchain_generation: u64 = 0,
+    vsync: bool,
+    transparent: bool = false,
 needs_recreate: bool = false,
 frame_active: bool = false,
 dvui_frame_active: bool = false,
@@ -242,6 +246,7 @@ pub fn init(allocator: std.mem.Allocator, window: *wio.Window, options: InitOpti
         .swapchain_image_usage = options.swapchain_image_usage.merge(.{ .color_attachment_bit = true }),
         .depth_format = options.depth_format,
         .vsync = options.vsync,
+        .transparent = options.transparent,
     };
     errdefer self.deinitBeforeRenderer();
 
@@ -408,7 +413,7 @@ pub fn beginApplicationFrame(self: *@This(), physical_size: dvui.Size.Physical) 
     switch (self.rendering_mode) {
         .render_pass => {
             const clear_values = [_]vk.ClearValue{
-                .{ .color = .{ .float_32 = .{ 0, 0, 0, 1 } } },
+                .{ .color = .{ .float_32 = .{ 0, 0, 0, if (self.transparent) 0 else 1 } } },
                 .{ .depth_stencil = .{ .depth = 1, .stencil = 0 } },
             };
             self.device.cmdBeginRenderPass(slot.command_buffer, &.{
@@ -547,7 +552,7 @@ fn beginDynamicRendering(self: *@This(), command_buffer: vk.CommandBuffer, image
         .resolve_image_layout = .color_attachment_optimal,
         .load_op = .clear,
         .store_op = .store,
-        .clear_value = .{ .color = .{ .float_32 = .{ 0, 0, 0, 1 } } },
+        .clear_value = .{ .color = .{ .float_32 = .{ 0, 0, 0, if (self.transparent) 0 else 1 } } },
     };
     const depth_attachment = vk.RenderingAttachmentInfo{
         .image_view = if (self.depth_format == null) .null_handle else self.depth_image_views[image_index],
@@ -802,7 +807,7 @@ fn createSwapchain(self: *@This(), requested: vk.Extent2D) !void {
         .queue_family_index_count = if (self.queue_families.graphics == self.queue_families.present) 0 else 2,
         .p_queue_family_indices = if (self.queue_families.graphics == self.queue_families.present) null else &family_indices,
         .pre_transform = capabilities.current_transform,
-        .composite_alpha = chooseCompositeAlpha(capabilities.supported_composite_alpha),
+        .composite_alpha = chooseCompositeAlpha(capabilities.supported_composite_alpha, self.transparent),
         .present_mode = choosePresentMode(modes, self.vsync),
         .clipped = .true,
     }, self.vk_alloc);
@@ -1366,7 +1371,15 @@ fn choosePresentMode(available: []const vk.PresentModeKHR, vsync: bool) vk.Prese
     return .fifo_khr;
 }
 
-fn chooseCompositeAlpha(supported: vk.CompositeAlphaFlagsKHR) vk.CompositeAlphaFlagsKHR {
+fn chooseCompositeAlpha(supported: vk.CompositeAlphaFlagsKHR, transparent: bool) vk.CompositeAlphaFlagsKHR {
+    // Transparent windows (client-side rounded corners) need the compositor to
+    // honor the alpha channel; opaque windows should stay opaque for the
+    // compositor's occlusion optimizations.
+    if (transparent) {
+        if (supported.pre_multiplied_bit_khr) return .{ .pre_multiplied_bit_khr = true };
+        if (supported.inherit_bit_khr) return .{ .inherit_bit_khr = true };
+        if (supported.post_multiplied_bit_khr) return .{ .post_multiplied_bit_khr = true };
+    }
     if (supported.opaque_bit_khr) return .{ .opaque_bit_khr = true };
     if (supported.pre_multiplied_bit_khr) return .{ .pre_multiplied_bit_khr = true };
     if (supported.post_multiplied_bit_khr) return .{ .post_multiplied_bit_khr = true };
