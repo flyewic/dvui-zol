@@ -44,8 +44,8 @@
             .lazy = true,
         },
         .wio = .{
-            .url = "git+https://github.com/flyewic/wio.git#c16e7e2bcc8c43c5ba0c7984b78ffa0f169ed428",
-            .hash = "wio-0.0.0-8xHrrwpECAAnH5YV1wrlm84wdOuGrl4QP-MhEhZeEH8A",
+            .url = "git+https://github.com/flyewic/wio.git#62120868f24c06d17d4394f04ffe5ff33167c5fa",
+            .hash = "wio-0.0.0-8xHrr9JFCACIG7GHPvesW1NKQ-YIwigjLgtbZrdhusVY",
             .lazy = true,
         },
         .opengl = .{
