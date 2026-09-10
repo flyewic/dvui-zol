@@ -417,6 +417,50 @@ pub fn stateSet(self: *Self, state: dvui.enums.WindowState) void {
     self.backend.windowStateSet(self, state);
 }
 
+/// Edge/corner from which a custom-title-bar resize can be initiated.
+pub const ResizeEdge = enum {
+    none,
+    top,
+    bottom,
+    left,
+    top_left,
+    bottom_left,
+    right,
+    top_right,
+    bottom_right,
+};
+
+/// Hide or show OS/window-system decorations. When hidden, the application is
+/// responsible for drawing its own title bar and driving move/resize itself.
+pub fn setDecorations(self: *Self, decorations: bool) void {
+    self.backend.windowSetDecorations(self, decorations);
+}
+
+/// Begin an interactive window move using the most recent input serial.
+pub fn beginWindowMove(self: *Self) void {
+    self.backend.windowMove(self);
+}
+
+/// Begin an interactive window resize from `edge`.
+pub fn beginWindowResize(self: *Self, edge: ResizeEdge) void {
+    self.backend.windowResize(self, edge);
+}
+
+/// Minimize (iconify) the window.
+pub fn minimizeWindow(self: *Self) void {
+    self.backend.windowMinimize(self);
+}
+
+/// Toggle the window between maximized and normal.
+pub fn toggleMaximizeWindow(self: *Self) void {
+    self.backend.windowToggleMaximize(self);
+}
+
+/// Ask the OS to close the window (delivers a close event).
+pub fn closeWindow(self: *Self) void {
+    self.backend.windowClose(self);
+}
+
 pub fn addFont(self: *Self, name: []const u8, ttf_bytes: []const u8, ttf_bytes_allocator: ?std.mem.Allocator) (std.mem.Allocator.Error || dvui.Font.Error)!void {
     try self.fonts.database.ensureUnusedCapacity(self.gpa, 1);
     // TODO: try to get this info from the ttf file, and also add override options

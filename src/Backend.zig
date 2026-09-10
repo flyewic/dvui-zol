@@ -277,6 +277,48 @@ pub fn windowStateSet(self: Backend, window: *dvui.Window, state: dvui.enums.Win
     }
 }
 
+/// Hide/show OS/window-system decorations (borderless when `false`).
+pub fn windowSetDecorations(self: Backend, window: *dvui.Window, decorations: bool) void {
+    if (comptime @hasDecl(Implementation, "windowSetDecorations")) {
+        self.impl.windowSetDecorations(window, decorations);
+    } else {}
+}
+
+/// Begin an interactive window move (custom title bar drag).
+pub fn windowMove(self: Backend, window: *dvui.Window) void {
+    if (comptime @hasDecl(Implementation, "windowMove")) {
+        self.impl.windowMove(window);
+    } else {}
+}
+
+/// Begin an interactive window resize from `edge`.
+pub fn windowResize(self: Backend, window: *dvui.Window, edge: dvui.Window.ResizeEdge) void {
+    if (comptime @hasDecl(Implementation, "windowResize")) {
+        self.impl.windowResize(window, edge);
+    } else {}
+}
+
+/// Minimize (iconify) the window.
+pub fn windowMinimize(self: Backend, window: *dvui.Window) void {
+    if (comptime @hasDecl(Implementation, "windowMinimize")) {
+        self.impl.windowMinimize(window);
+    } else {}
+}
+
+/// Toggle the window between maximized and normal.
+pub fn windowToggleMaximize(self: Backend, window: *dvui.Window) void {
+    if (comptime @hasDecl(Implementation, "windowToggleMaximize")) {
+        self.impl.windowToggleMaximize(window);
+    } else {}
+}
+
+/// Ask the windowing system to close the window.
+pub fn windowClose(self: Backend, window: *dvui.Window) void {
+    if (comptime @hasDecl(Implementation, "windowClose")) {
+        self.impl.windowClose(window);
+    } else {}
+}
+
 // We need a comptime support flag per Backend, and the argument type is not obvious at call site so
 // check expectation while we are at it.
 pub const support_child_os_wins = if (@hasDecl(Implementation, "initWindowSecondary"))

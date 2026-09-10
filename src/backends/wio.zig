@@ -118,6 +118,40 @@ pub fn windowStateSet(self: *@This(), _: *dvui.Window, state: dvui.enums.WindowS
     });
 }
 
+pub fn windowSetDecorations(self: *@This(), _: *dvui.Window, decorations: bool) void {
+    self.window.setDecorations(decorations);
+}
+
+pub fn windowMove(self: *@This(), _: *dvui.Window) void {
+    self.window.beginMove();
+}
+
+pub fn windowResize(self: *@This(), _: *dvui.Window, edge: dvui.Window.ResizeEdge) void {
+    self.window.beginResize(switch (edge) {
+        .none => .none,
+        .top => .top,
+        .bottom => .bottom,
+        .left => .left,
+        .top_left => .top_left,
+        .bottom_left => .bottom_left,
+        .right => .right,
+        .top_right => .top_right,
+        .bottom_right => .bottom_right,
+    });
+}
+
+pub fn windowMinimize(self: *@This(), _: *dvui.Window) void {
+    self.window.minimize();
+}
+
+pub fn windowToggleMaximize(self: *@This(), _: *dvui.Window) void {
+    self.window.toggleMaximize();
+}
+
+pub fn windowClose(self: *@This(), _: *dvui.Window) void {
+    self.window.closeWindow();
+}
+
 pub fn waitEventTimeout(_: *@This(), timeout_us: u32) void {
     if (timeout_us == std.math.maxInt(u32)) {
         wio.wait(.{});
