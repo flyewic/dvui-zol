@@ -230,6 +230,14 @@ pub fn addEvent(self: *@This(), win: *dvui.Window, event: wio.Event) !bool {
             if (modifiers.control) self.mod.combine(.lcontrol);
             if (modifiers.alt) self.mod.combine(.lalt);
             if (modifiers.gui) self.mod.combine(.lcommand);
+            // Keep DVUI's authoritative modifier state in sync with the
+            // backend. It is otherwise only updated from `addEventKey`, whose
+            // per-key `mod` payload is derived from `self.mod` and can lag the
+            // Wayland `modifiers` event (which the compositor sends after the
+            // key that changed it). The result is modifiers one change behind:
+            // shift+wheel scrolls the wrong axis and keeps doing so after
+            // release.
+            win.modifiers = self.mod;
             return false;
         },
         .char => |char| {
