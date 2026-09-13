@@ -74,6 +74,10 @@ pub const Key = struct {
         up,
     },
     mod: enums.Mod,
+    /// The character the key produces under the active keyboard layout,
+    /// independent of Ctrl/Alt (backend-provided; null if unknown). Lets an app
+    /// resolve non-US-layout shortcuts (Ctrl+ö on Swedish) and learn the layout.
+    text: ?u21 = null,
 
     /// True if matches the named keybind (follows Keybind.also).  See `matchKeyBind`.
     pub fn matchBind(self: Key, keybind_name: []const u8) bool {
