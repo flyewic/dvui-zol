@@ -13,6 +13,9 @@ scale: f32,
 draw_available: bool = true,
 arena: std.mem.Allocator = undefined, // assigned in begin()
 mod: dvui.enums.Mod = .none,
+/// Layout character from the most recent `.key_text` event, attached to the key
+/// press/repeat that follows it (wio emits `.key_text` first).
+pending_key_text: ?u21 = null,
 touch: [10]dvui.Point = @splat(.{ .x = std.math.inf(f32), .y = std.math.inf(f32) }),
 cursor_last: dvui.enums.Cursor = .arrow,
 
@@ -245,7 +248,13 @@ pub fn addEvent(self: *@This(), win: *dvui.Window, event: wio.Event) !bool {
             const len = try std.unicode.utf8Encode(char, &utf8);
             return try win.addEventText(.{ .text = utf8[0..len] });
         },
+        .key_text => |cp| {
+            self.pending_key_text = cp;
+            return false;
+        },
         .button_press, .button_release => |button| {
+            const key_text = self.pending_key_text;
+            self.pending_key_text = null;
             const maybe_mouse: ?dvui.enums.Button = switch (button) {
                 .mouse_left => .left,
                 .mouse_right => .right,
@@ -263,13 +272,19 @@ pub fn addEvent(self: *@This(), win: *dvui.Window, event: wio.Event) !bool {
                 .code = buttonToDvuiKey(button),
                 .action = if (event == .button_press) .down else .up,
                 .mod = self.mod,
+                .text = key_text,
             });
         },
-        .button_repeat => |button| return try win.addEventKey(.{
-            .code = buttonToDvuiKey(button),
-            .action = .repeat,
-            .mod = self.mod,
-        }),
+        .button_repeat => |button| {
+            const key_text = self.pending_key_text;
+            self.pending_key_text = null;
+            return try win.addEventKey(.{
+                .code = buttonToDvuiKey(button),
+                .action = .repeat,
+                .mod = self.mod,
+                .text = key_text,
+            });
+        },
         .mouse => |mouse| {
             const x: f32 = mouse.x;
             const y: f32 = mouse.y;
