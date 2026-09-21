@@ -56,6 +56,12 @@ inject_motion_event: bool = false,
 /// events). Apps can read this to adapt client-side decorations.
 window_state: dvui.enums.WindowState = .normal,
 
+/// Whether the OS window currently has keyboard focus. Set by backends that
+/// report focus change (the wio backend's `.focused`/`.unfocused` events) and
+/// read with `dvui.windowFocused`. Starts true so a backend that never reports
+/// focus behaves as before.
+window_focused: bool = true,
+
 dragging: dvui.Dragging = .{},
 
 /// Press-and-hold duration before a context menu opens from touch or long click.
