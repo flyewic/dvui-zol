@@ -203,8 +203,13 @@ pub fn addEvent(self: *@This(), win: *dvui.Window, event: wio.Event) !bool {
             try win.addEventWindow(.{ .action = .close });
             return false;
         },
+        .focused => {
+            win.window_focused = true;
+            return false;
+        },
         .unfocused => {
             self.mod = .none;
+            win.window_focused = false;
             return false;
         },
         .size_logical => |size| {
