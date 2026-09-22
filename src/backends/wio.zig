@@ -355,6 +355,7 @@ pub fn main(main_init: std.process.Init) !void {
     var window = try wio.Window.create(.{
         .event_fn_data = &events,
         .title = config.title,
+        .app_id = config.app_id,
         .size = .{ .width = @trunc(config.size.w), .height = @trunc(config.size.h) },
         .scale = 1,
         .transparent = config.transparent,

@@ -98,6 +98,13 @@ pub const StartOptions = struct {
     vsync: bool = true,
     /// The application title to display
     title: [:0]const u8,
+    /// Application identifier used as the X11 window class (`WM_CLASS`) and the
+    /// Wayland `app_id`. Compositors/task switchers (e.g. KDE's alt-tab) use it
+    /// to match the window to a desktop entry, which is how the launcher icon
+    /// resolves. Null leaves it unset (some compositors then show a generic
+    /// icon). Set it to the desktop file's base name (e.g. `"zol"` for
+    /// `zol.desktop`). Currently honored by the wio backend only.
+    app_id: ?[]const u8 = null,
     /// Organization name for SDL preference paths when `pref_path` is null
     /// (`SDL_GetPrefPath(org, title)`). Defaults to `"dvui"`.
     org: [:0]const u8 = "dvui",
