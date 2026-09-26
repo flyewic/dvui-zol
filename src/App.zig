@@ -115,6 +115,14 @@ pub const StartOptions = struct {
     hidden: bool = false,
     /// Set the window to be transparent
     transparent: bool = false,
+    /// Ask the window system for its own decorations (title bar / borders).
+    /// When true, an app that otherwise draws its own chrome should hide it.
+    /// Defaults to true (the platform default: system decorations for an opaque
+    /// window). Ignored when `transparent` is true, since system decorations
+    /// need an opaque surface. Currently honored by the wio backend only. On
+    /// Wayland this takes the pure xdg-shell server-side-decoration path when
+    /// the compositor offers it, skipping libdecor.
+    decorations: bool = true,
     /// Automatically restore the window position and size from the previous
     /// run and save them at exit (currently SDL3 backend only).  The geometry
     /// is stored as `window_geometry.zon`.  When `pref_path` is null, the file
