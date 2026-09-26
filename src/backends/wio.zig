@@ -360,8 +360,10 @@ pub fn main(main_init: std.process.Init) !void {
         .scale = 1,
         .transparent = config.transparent,
         // Client-side decorations (transparent surfaces / app-drawn title bar)
-        // must not load libdecor's GTK plugin. See wio CreateWindowOptions.
-        .decorations = !config.transparent,
+        // must not load libdecor's GTK plugin. With system decorations wanted
+        // and an opaque surface, wio takes the pure xdg-shell server-side path
+        // when the compositor offers it. See wio CreateWindowOptions.
+        .decorations = config.decorations and !config.transparent,
         .gl_options = gl_options,
     });
     defer window.destroy();
