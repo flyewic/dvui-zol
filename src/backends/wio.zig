@@ -359,6 +359,9 @@ pub fn main(main_init: std.process.Init) !void {
         .size = .{ .width = @trunc(config.size.w), .height = @trunc(config.size.h) },
         .scale = 1,
         .transparent = config.transparent,
+        // Client-side decorations (transparent surfaces / app-drawn title bar)
+        // must not load libdecor's GTK plugin. See wio CreateWindowOptions.
+        .decorations = !config.transparent,
         .gl_options = gl_options,
     });
     defer window.destroy();
