@@ -12,6 +12,11 @@ size_physical: dvui.Size.Physical,
 scale: f32,
 draw_available: bool = true,
 arena: std.mem.Allocator = undefined, // assigned in begin()
+/// Clipboard text captured from wio's callback API. wio's `getClipboardText`
+/// is callback-based because some backends (X11) deliver asynchronously, so we
+/// cannot borrow the buffer it hands us. Fixed capacity.
+clipboard_buf: [64 * 1024]u8 = undefined,
+clipboard_len: usize = 0,
 mod: dvui.enums.Mod = .none,
 /// Layout character from the most recent `.key_text` event, attached to the key
 /// press/repeat that follows it (wio emits `.key_text` first).
@@ -85,7 +90,18 @@ pub fn contentScale(self: *@This()) f32 {
 }
 
 pub fn clipboardText(self: *@This()) ![]const u8 {
-    return self.window.getClipboardText(self.arena) orelse "";
+    const Self = @This();
+    const Cb = struct {
+        fn f(data: ?*anyopaque, text: []const u8) void {
+            const b: *Self = @ptrCast(@alignCast(data));
+            const n = @min(text.len, b.clipboard_buf.len);
+            @memcpy(b.clipboard_buf[0..n], text[0..n]);
+            b.clipboard_len = n;
+        }
+    };
+    self.clipboard_len = 0;
+    self.window.getClipboardText(Cb.f, self);
+    return self.clipboard_buf[0..self.clipboard_len];
 }
 
 pub fn clipboardTextSet(self: *@This(), text: []const u8) !void {
@@ -175,7 +191,7 @@ pub fn renderPresent(_: *@This()) void {}
 pub fn textInputRect(self: *@This(), maybe_rect: ?dvui.Rect.Natural) void {
     if (maybe_rect) |rect| {
         // FIXME: not actually the cursor position
-        self.window.enableTextInput(.{ .cursor = .{ .x = std.math.lossyCast(u16, rect.x), .y = std.math.lossyCast(u16, rect.y) } });
+        self.window.enableTextInput(.{ .cursor = .{ .x = std.math.lossyCast(i16, rect.x), .y = std.math.lossyCast(i16, rect.y) } });
     } else {
         self.window.disableTextInput();
     }
