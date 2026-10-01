@@ -27,6 +27,13 @@ scroll_to_focused: bool = false,
 /// * when showing the IME input window, position it near this
 text_input_rect: ?Rect.Natural = null,
 
+/// Active IME composition (preedit) text, if any. Set by a backend that
+/// supports IME (the wio/Wayland backend does); null when no composition is in
+/// progress. `cursor` is the codepoint range to render as selected, or null
+/// when the IME did not report one. The `text` slice is backend-owned and only
+/// valid until the next event batch.
+text_editing: ?TextEditing = null,
+
 snap_to_pixels: bool = true,
 kerning: bool = true,
 /// The alpha value for all rendering. All colors alpha values will be
@@ -1527,6 +1534,19 @@ pub fn cursorRequestedFloating(self: *const Self) ?dvui.enums.Cursor {
 pub fn textInputRequested(self: *const Self) ?Rect.Natural {
     return self.text_input_rect;
 }
+
+/// The active IME composition, or null when none is in progress.
+pub fn textEditingRequested(self: *const Self) ?TextEditing {
+    return self.text_editing;
+}
+
+/// Active IME composition (preedit). See `Window.text_editing`.
+pub const TextEditing = struct {
+    /// Composition text (UTF-8). Owned by the backend.
+    text: []const u8,
+    /// Codepoint range the IME marks as selected, or null when unknown.
+    cursor: ?[2]usize = null,
+};
 
 pub fn addRenderCommand(self: *Self, cmd: dvui.RenderCommand.Command, after: bool) void {
     var sw = self.subwindows.current() orelse &self.subwindows.stack.items[0];

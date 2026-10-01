@@ -16,6 +16,13 @@ mod: dvui.enums.Mod = .none,
 /// Layout character from the most recent `.key_text` event, attached to the key
 /// press/repeat that follows it (wio emits `.key_text` first).
 pending_key_text: ?u21 = null,
+/// Active IME composition (preedit). wio sends `preview_reset`, then one
+/// `preview_char` per codepoint, then `preview_cursor`; we accumulate here and
+/// publish through `Window.text_editing`. Fixed capacity: a composition longer
+/// than this is truncated rather than allocated.
+preedit_buf: [256]u8 = undefined,
+preedit_len: usize = 0,
+preedit_cursor: ?[2]usize = null,
 touch: [10]dvui.Point = @splat(.{ .x = std.math.inf(f32), .y = std.math.inf(f32) }),
 cursor_last: dvui.enums.Cursor = .arrow,
 
@@ -210,6 +217,7 @@ pub fn addEvent(self: *@This(), win: *dvui.Window, event: wio.Event) !bool {
         .unfocused => {
             self.mod = .none;
             win.window_focused = false;
+            win.text_editing = null;
             return false;
         },
         .size_logical => |size| {
@@ -249,9 +257,32 @@ pub fn addEvent(self: *@This(), win: *dvui.Window, event: wio.Event) !bool {
             return false;
         },
         .char => |char| {
+            // A committed character ends any composition.
+            win.text_editing = null;
             var utf8: [4]u8 = undefined;
             const len = try std.unicode.utf8Encode(char, &utf8);
             return try win.addEventText(.{ .text = utf8[0..len] });
+        },
+        .preview_reset => {
+            self.preedit_len = 0;
+            self.preedit_cursor = null;
+            win.text_editing = null;
+            return false;
+        },
+        .preview_char => |cp| {
+            var tmp: [4]u8 = undefined;
+            const n = std.unicode.utf8Encode(cp, &tmp) catch 0;
+            if (self.preedit_len + n <= self.preedit_buf.len) {
+                @memcpy(self.preedit_buf[self.preedit_len..][0..n], tmp[0..n]);
+                self.preedit_len += n;
+            }
+            win.text_editing = .{ .text = self.preedit_buf[0..self.preedit_len], .cursor = self.preedit_cursor };
+            return false;
+        },
+        .preview_cursor => |cur| {
+            self.preedit_cursor = .{ cur[0], cur[1] };
+            if (win.text_editing) |*te| te.cursor = self.preedit_cursor;
+            return false;
         },
         .key_text => |cp| {
             self.pending_key_text = cp;

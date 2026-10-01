@@ -2520,6 +2520,15 @@ pub fn wantTextInput(r: Rect.Natural) void {
     cw.text_input_rect = r;
 }
 
+/// The active IME composition (preedit), or null when none is in progress.
+/// Backends with IME support (the wio/Wayland backend) populate this; widgets
+/// that need to suppress handling while text is being composed (e.g. a terminal
+/// forwarding keys to a pty) can check it. The returned `text` is backend-owned
+/// and only valid for the current frame.
+pub fn textEditing() ?Window.TextEditing {
+    return currentWindow().text_editing;
+}
+
 /// Temporary menu that floats above current layer.  Usually contains multiple
 /// `menuItemLabel`, `menuItemIcon`, or `menuItem`, but can contain any
 /// widgets.
