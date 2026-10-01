@@ -48,9 +48,8 @@ pub const InitOptions = struct {
             limit: usize = 10_000,
         },
 
-        /// Use std.ArrayList(u8).  The limit is total characters, the
-        /// arraylist might allocate more capacity.  ArrayList.items is updated
-        /// in deinit() (file an issue if this is a problem).
+        /// Use std.ArrayList(u8).  The limit is content bytes, the
+        /// arraylist might allocate more capacity.
         array_list: struct {
             backing: *std.ArrayList(u8),
             allocator: std.mem.Allocator,
@@ -64,7 +63,11 @@ pub const InitOptions = struct {
         },
     };
 
+    /// Where to store the text.  Use `textGet` to get the contents.
     text: TextOption = .{ .internal = .{} },
+
+    /// Set the text on the first frame to this.  Cursor is kept at the start.
+    text_initial: ?[]const u8 = null,
     tree_sitter: ?dvui.TreeSitter = null,
     /// Faded text shown when the textEntry is empty
     placeholder: ?[]const u8 = null,
@@ -78,7 +81,7 @@ pub const InitOptions = struct {
     kerning: ?bool = null,
     scroll_vertical: ?bool = null, // default is value of multiline
     scroll_vertical_bar: ?ScrollInfo.ScrollBarMode = null, // default .auto
-    scroll_horizontal: ?bool = null, // default true
+    scroll_horizontal: ?bool = null, // default false if break_lines, true otherwise
     scroll_horizontal_bar: ?ScrollInfo.ScrollBarMode = null, // default .auto if multiline, .hide if not
 
     // must be a single utf8 character
@@ -111,7 +114,7 @@ pub fn init(self: *TextEntryWidget, src: std.builtin.SourceLocation, init_opts: 
     var scroll_init_opts = ScrollAreaWidget.InitOpts{
         .vertical = if (init_opts.scroll_vertical orelse init_opts.multiline) .auto else .none,
         .vertical_bar = init_opts.scroll_vertical_bar orelse .auto,
-        .horizontal = if (init_opts.scroll_horizontal orelse true) .auto else .none,
+        .horizontal = if (init_opts.scroll_horizontal orelse !init_opts.break_lines) .auto else .none,
         .horizontal_bar = init_opts.scroll_horizontal_bar orelse (if (init_opts.multiline) .auto else .hide),
     };
 
@@ -268,6 +271,13 @@ pub fn init(self: *TextEntryWidget, src: std.builtin.SourceLocation, init_opts: 
     }
 
     // don't call textLayout.processEvents here, we forward events inside our own processEvents
+
+    if (dvui.firstFrame(self.data().id)) {
+        if (init_opts.text_initial) |ti| {
+            self.textSet(ti, false);
+            self.textLayout.selection.moveCursor(0, false); // keep from scrolling to the bottom
+        }
+    }
 
     // textLayout is maintaining the selection for us, but if the text
     // changed, we need to update the selection to be valid before we
@@ -433,15 +443,16 @@ pub fn draw(self: *TextEntryWidget) void {
                 iter.reparse(edit);
             }
 
-            // set the bytes we need matches for
-            if (self.textLayout.cacheLayoutBytes()) |clb| {
-                iter.setByteRange(clb.start, clb.end);
-            }
-
-            // do all matches
             const normal_opts = self.data().options.strip();
-            while (iter.next()) |h| {
-                self.textLayout.addText(h.text, h.opts orelse normal_opts);
+            outer: while (true) {
+                const cln = self.textLayout.cacheLayoutNext();
+                iter.setByteRange(cln.start, cln.end);
+                while (iter.next()) |h| {
+                    self.textLayout.addText(h.text, h.opts orelse normal_opts);
+                    if (self.textLayout.bytes_seen >= cln.end) continue :outer;
+                } else {
+                    break :outer;
+                }
             }
 
             self.textLayout.addTextDone(normal_opts);
@@ -468,7 +479,7 @@ pub fn drawBeforeText(self: *TextEntryWidget) void {
     dvui.clipSet(self.textClip);
 
     if (self.init_opts.cache_layout) {
-        self.textLayout.cache_layout_bytes = self.textLayout.bytesNeeded(
+        self.textLayout.cacheLayoutEdit(
             self.text_changed_start,
             self.text_changed_end,
             self.text_changed_added,
@@ -497,7 +508,7 @@ pub fn drawCursor(self: *TextEntryWidget) void {
 
         var crect = self.textLayout.cursor_rect.plus(.{ .x = -1 });
         crect.w = 2;
-        self.textLayout.screenRectScale(crect).r.fill(.{}, .{ .color = dvui.themeGet().focus, .fade = 1.0 });
+        self.textLayout.screenRectScale(crect).r.fill(.{}, .{ .color = .{ .color = dvui.themeGet().focus }, .fade = 1.0 });
     }
 }
 
@@ -877,6 +888,7 @@ pub fn processEvent(self: *TextEntryWidget, e: *Event) void {
                 e.handle(@src(), self.data());
                 if (!self.textLayout.selection.empty()) {
                     self.textLayout.selection.moveCursor(self.textLayout.selection.start, false);
+                    self.textLayout.scroll_to_cursor = true;
                 } else {
                     if (self.textLayout.sel_move == .none) {
                         self.textLayout.sel_move = .{ .word_left_right = .{ .select = false } };
@@ -893,6 +905,7 @@ pub fn processEvent(self: *TextEntryWidget, e: *Event) void {
                 if (!self.textLayout.selection.empty()) {
                     self.textLayout.selection.moveCursor(self.textLayout.selection.end, false);
                     self.textLayout.selection.affinity = .before;
+                    self.textLayout.scroll_to_cursor = true;
                 } else {
                     if (self.textLayout.sel_move == .none) {
                         self.textLayout.sel_move = .{ .word_left_right = .{ .select = false } };

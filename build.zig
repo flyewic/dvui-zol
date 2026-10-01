@@ -36,8 +36,9 @@ const CommonSdl = struct {
     options: *std.Build.Step.Options,
 };
 
+/// `mod`: a *Module or *TranslateC; both need the NDK's libc headers (zig bundles none for Android).
 fn addAndroidLibC(
-    mod: *std.Build.Module,
+    mod: anytype,
     opts: DvuiModuleOptions,
 ) void {
     if (opts.android_include_path) |include_path| {
@@ -52,6 +53,20 @@ fn addAndroidLibC(
 
         mod.addSystemIncludePath(include_path.path(opts.b, arch_specific_path));
         mod.addSystemIncludePath(include_path);
+        // Android apps load native code only as JNI shared libraries.
+        if (@TypeOf(mod) == *std.Build.Module) mod.pic = true;
+        if (@TypeOf(mod) == *std.Build.Step.TranslateC) {
+            // Zig 0.16's translate-c (aro) chokes on bionic headers: it doesn't derive
+            // __ANDROID_API__ from the target, can't parse the FORTIFY inline wrappers, and
+            // rejects `[_Nullable 2]` array params. Declarations only, so these are safe here.
+            const api = opts.b.fmt("{d}", .{opts.target.result.os.version_range.linux.android});
+            mod.defineCMacro("__ANDROID_API__", api);
+            mod.defineCMacro("__ANDROID_MIN_SDK_VERSION__", api);
+            mod.defineCMacro("__clang_analyzer__", "1"); // turns off __BIONIC_FORTIFY
+            mod.defineCMacro("_Nullable", "");
+            mod.defineCMacro("_Nonnull", "");
+            mod.defineCMacro("_Null_unspecified", "");
+        }
     } else {
         @panic("Can't build for android without android_include_path");
     }
@@ -71,53 +86,33 @@ pub fn linkSdl3(
         // SDL3 compiled from source
 
         sdl3_options.addOption(std.SemanticVersion, "version", .{ .major = 3, .minor = 0, .patch = 0 });
-        // msvcup / minimal SDK trees often omit um/gameinput.h. Upstream's Zig SDL enables
-        // HAVE_GAMEINPUT_H for every MSVC build; undef here when cross-compiling so
-        // SDL_gameinput*.cpp stub out instead of #including <gameinput.h>.
-        const cross_win_msvc = opts.target.result.os.tag == .windows and
-            opts.target.result.abi == .msvc and
-            opts.b.graph.host.result.os.tag != .windows;
-        // NOTE: iOS builds compile a static lib that Xcode's own linker (not zig) links
-        // together with this dependency's separately-built libSDL3.a. UBSan's runtime
-        // (__ubsan_handle_*) only gets bundled into the artifact zig itself produces as a
-        // final binary, so a plain sanitize_c default (full in Debug) leaves libSDL3.a with
-        // unresolved symbols at that link step. Every other target links through zig itself,
-        // which bundles ubsan into the one binary, so this is iOS-only.
-        const sdl3_sanitize_c: ?std.zig.SanitizeC = if (opts.target.result.os.tag == .ios) .off else null;
-        const sdl3_dep = if (cross_win_msvc)
-            opts.b.lazyDependency("sdl3", .{
-                .target = opts.target,
-                .optimize = opts.optimize,
-                .system_include_path = opts.sdl3_system_include_path,
-                .system_framework_path = opts.sdl3_system_framework_path,
-                .library_path = opts.sdl3_library_path,
-                .sanitize_c = sdl3_sanitize_c,
-                .build_config_h_overrides = @as([]const []const u8, &[_][]const u8{
-                    "-UHAVE_GAMEINPUT_H",
-                    "-USDL_JOYSTICK_GAMEINPUT",
-                }),
-            })
-        else
-            opts.b.lazyDependency("sdl3", .{
-                .target = opts.target,
-                .optimize = opts.optimize,
-                .system_include_path = opts.sdl3_system_include_path,
-                .system_framework_path = opts.sdl3_system_framework_path,
-                .library_path = opts.sdl3_library_path,
-                .sanitize_c = sdl3_sanitize_c,
-            });
+        const sdl3_dep = opts.b.lazyDependency("sdl3", .{
+            .target = opts.target,
+            .optimize = opts.optimize,
+            .include_path = if (opts.target.result.abi.isAndroid())
+                opts.android_include_path
+            else
+                opts.sdl3_system_include_path,
+            .framework_path = opts.sdl3_system_framework_path,
+            .library_path = opts.sdl3_library_path,
+        });
         if (sdl3_dep) |sdl3| {
             if (opts.target.result.abi.isAndroid()) {
                 sdl_mod.addIncludePath(sdl3.artifact("SDL3").getEmittedIncludeTree());
                 addAndroidLibC(sdl_mod, opts);
+                sdl_translate_c.addIncludePath(sdl3.artifact("SDL3").getEmittedIncludeTree());
+                addAndroidLibC(sdl_translate_c, opts);
+                // NOTE: published for installAndroidSdl3() below. The NDK links libSDL3.a into
+                // the app's JNI .so, and Gradle compiles SDL's Java side from the same source.
+                opts.b.installArtifact(sdl3.artifact("SDL3"));
+                opts.b.addNamedLazyPath("sdl3_android_java", sdl3.builder.dependency("sdl", .{}).path("android-project/app/src/main/java"));
             } else {
                 sdl_translate_c.addIncludePath(sdl3.artifact("SDL3").getEmittedIncludeTree());
                 sdl_mod.linkLibrary(sdl3.artifact("SDL3"));
             }
             if (opts.target.result.os.tag == .ios) {
-                // NOTE: published for installIosSdl3() below, so downstream doesn't need its own sdl3 dep.
                 opts.b.installArtifact(sdl3.artifact("SDL3"));
-                opts.b.addNamedLazyPath("sdl3_include", sdl3.path("include"));
+                opts.b.addNamedLazyPath("sdl3_include", sdl3.artifact("SDL3").getEmittedIncludeTree());
             }
         }
     }
@@ -127,12 +122,36 @@ pub fn linkSdl3(
 /// Installs the SDL3 static lib + headers into `lib_step`'s prefix, for an Xcode
 /// `zig build lib` step to link/include. Call once from a downstream iOS app's build.zig.
 pub fn installIosSdl3(b: *std.Build, dvui_dep: *std.Build.Dependency, lib_step: *std.Build.Step) void {
-    lib_step.dependOn(&b.addInstallArtifact(dvui_dep.artifact("SDL3"), .{}).step);
+    installIosStaticLib(b, dvui_dep.artifact("SDL3"), lib_step);
     lib_step.dependOn(&b.addInstallDirectory(.{
         .source_dir = dvui_dep.namedLazyPath("sdl3_include"),
         .install_dir = .prefix,
         .install_subdir = "include",
     }).step);
+}
+
+/// Installs libSDL3.a into `lib_step`'s prefix and SDL's Java sources (org.libsdl.app) into
+/// `<prefix>/java`, for an Android app's CMake/Gradle build to consume. Call once from a
+/// downstream Android app's build.zig.
+pub fn installAndroidSdl3(b: *std.Build, dvui_dep: *std.Build.Dependency, lib_step: *std.Build.Step) void {
+    lib_step.dependOn(&b.addInstallArtifact(dvui_dep.artifact("SDL3"), .{}).step);
+    lib_step.dependOn(&b.addInstallDirectory(.{
+        .source_dir = dvui_dep.namedLazyPath("sdl3_android_java"),
+        .install_dir = .prefix,
+        .install_subdir = "java",
+    }).step);
+}
+
+/// Installs a static lib for Xcode to link, rewritten via `zig ar --format=darwin`.
+/// Zig's own archiver doesn't 8-byte-align Mach-O members, and Xcode's ld (iOS 27 SDK)
+/// drops misaligned members -> undefined symbols. `L` copies members without extracting,
+/// so duplicate member names (SDL has several) survive.
+/// ponytail: remove once zig's archiver pads darwin members itself.
+pub fn installIosStaticLib(b: *std.Build, lib: *std.Build.Step.Compile, lib_step: *std.Build.Step) void {
+    const ar = b.addSystemCommand(&.{ b.graph.zig_exe, "ar", "qcLs", "--format=darwin" });
+    const out = ar.addOutputFileArg(lib.out_lib_filename);
+    ar.addArtifactArg(lib);
+    lib_step.dependOn(&b.addInstallLibFile(out, lib.out_lib_filename).step);
 }
 
 /// Resolve the macOS SDK path via `xcrun --show-sdk-path`. Used to wire SDK include
@@ -163,7 +182,7 @@ pub fn build(b: *std.Build) !void {
 
     var back_to_build = b.option(Backend, "backend", "Backend to build");
     const render_backend = b.option(RenderBackend, "renderer", "Render backend to build (default: implied by backend)") orelse .default;
-    if (render_backend == .vulkan) {
+    if (render_backend == .vulkan or render_backend == .vulkan_external) {
         if (back_to_build) |backend| {
             if (backend != .wio and backend != .custom) @panic("the Vulkan render backend currently supports -Dbackend=wio or -Dbackend=custom");
         } else {
@@ -440,7 +459,7 @@ pub fn buildBackend(
     switch (backend) {
         .custom => {
             dvui_opts.setDefaults(.{ .libc = false, .freetype = false, .tiny_file_dialogs = false, .stb_image = false, .tree_sitter = true });
-            const expose_vulkan_renderer = dvui_opts.render_backend == .vulkan;
+            const expose_vulkan_renderer = dvui_opts.render_backend == .vulkan_external;
             if (expose_vulkan_renderer) dvui_opts.render_backend = .default;
 
             // For export to users who are bringing their own backend.  Use in your build.zig:
@@ -1119,7 +1138,7 @@ pub fn buildBackend(
                 .target = target,
                 .optimize = optimize,
                 .enable_opengl = (dvui_opts.render_backend == .opengl),
-                .enable_vulkan = (dvui_opts.render_backend == .vulkan),
+                .enable_vulkan = (dvui_opts.render_backend == .vulkan or dvui_opts.render_backend == .vulkan_external),
                 .enable_joystick = dvui_opts.wio_joystick,
                 .enable_audio = dvui_opts.wio_audio,
                 .unix_backends = dvui_opts.wio_unix_backends,
@@ -1351,6 +1370,7 @@ pub fn addDvuiModule(
         .link_libc = libc,
     });
     if (libc) dvui_translate_c.defineCMacro("DVUI_USE_LIBC", "1");
+    if (target.result.abi.isAndroid()) addAndroidLibC(dvui_translate_c, opts);
     // NOTE: iOS cross-compiles have no native sysroot, so dvui_mod (which directly compiles
     // C sources, e.g. vendor/stb/*.c below) needs libc headers like stdio.h passed explicitly.
     const dvui_mod_needs_ios_sysroot = target.result.os.tag == .ios;
@@ -1417,6 +1437,15 @@ pub fn addDvuiModule(
             const vulkan = b.lazyDependency("vulkan", .{ .registry = registry }) orelse return dvui_mod;
             renderer_mod.addImport("vk", vulkan.module("vulkan-zig"));
             renderer_mod.addImport("wio", opts.wio_module orelse @panic("Vulkan renderer requires the wio module"));
+        },
+        .vulkan_external => {
+            renderer_mod.root_source_file = b.path("src/backends/render/vulkan/renderer.zig");
+            const registry = if (b.graph.environ_map.get("VULKAN_SDK")) |sdk|
+                std.Build.LazyPath{ .cwd_relative = b.pathJoin(&.{ sdk, "share", "vulkan", "registry", "vk.xml" }) }
+            else
+                (b.lazyDependency("vulkan_headers", .{}) orelse return dvui_mod).path("registry/vk.xml");
+            const vulkan = b.lazyDependency("vulkan", .{ .registry = registry }) orelse return dvui_mod;
+            renderer_mod.addImport("vk", vulkan.module("vulkan-zig"));
         },
     }
     renderer_mod.addImport("dvui", dvui_mod);
