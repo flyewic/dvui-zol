@@ -5,6 +5,12 @@ pub const wio = @import("wio");
 
 pub const kind: dvui.enums.Backend = .wio;
 
+/// How long the size must hold still before a held resize is applied.
+const resize_settle_ns: i128 = 120 * std.time.ns_per_ms;
+/// Apply a held resize immediately once it is this much larger or smaller than
+/// the current one, so a fast drag never stretches far.
+const resize_max_stretch: f32 = 0.35;
+
 io: std.Io,
 window: wio.Window,
 size_natural: dvui.Size.Natural,
@@ -30,6 +36,21 @@ preedit_len: usize = 0,
 preedit_cursor: ?[2]usize = null,
 touch: [10]dvui.Point = @splat(.{ .x = std.math.inf(f32), .y = std.math.inf(f32) }),
 cursor_last: dvui.enums.Cursor = .arrow,
+
+/// Window-size hold-off across a live resize. A drag changes the size every
+/// frame; recreating the renderer's swapchain for each one costs several ms
+/// (fresh images, views, semaphores/fences/command buffers), which caps the
+/// drag well below the display refresh. So keep reporting the last settled size
+/// while the size keeps changing — DVUI lays out at it and the renderer keeps
+/// its swapchain — while the compositor scales the current buffer to the new
+/// surface (wio sets the `wp_viewport` destination on every configure). The
+/// pending size is applied, and the swapchain recreated once, when it holds
+/// still or grows beyond what scaling can hide.
+seen_natural: bool = false,
+seen_physical: bool = false,
+pending_natural: ?dvui.Size.Natural = null,
+pending_physical: ?dvui.Size.Physical = null,
+resize_deadline_ns: i128 = 0,
 
 manage_backend_tracking: dvui.Backend.Common.TrackManageBackend = .{},
 
@@ -78,11 +99,82 @@ pub fn begin(self: *@This(), arena: std.mem.Allocator) !void {
 pub fn end(_: *@This()) !void {}
 
 pub fn pixelSize(self: *@This()) dvui.Size.Physical {
+    self.pumpResize();
     return self.size_physical;
 }
 
 pub fn windowSize(self: *@This()) dvui.Size.Natural {
+    self.pumpResize();
     return self.size_natural;
+}
+
+/// Apply a held resize once it has settled (or grown too far to keep scaling).
+/// Safe to call every frame; a no-op when nothing is pending.
+fn pumpResize(self: *@This()) void {
+    const n = self.pending_natural orelse return;
+    const p = self.pending_physical orelse return;
+    if (self.nanoTime() < self.resize_deadline_ns and !self.stretchTooLarge(p)) return;
+    self.size_natural = n;
+    self.size_physical = p;
+    self.pending_natural = null;
+    self.pending_physical = null;
+    self.refresh();
+}
+
+fn stretchTooLarge(self: *@This(), p: dvui.Size.Physical) bool {
+    const dw = @abs(p.w - self.size_physical.w) / @max(self.size_physical.w, 1);
+    const dh = @abs(p.h - self.size_physical.h) / @max(self.size_physical.h, 1);
+    return dw > resize_max_stretch or dh > resize_max_stretch;
+}
+
+/// Whether the compositor can scale a buffer whose size differs from the
+/// surface, which is what makes holding the size invisible during a drag.
+/// `wio.Window.backend` is a bare union of platform windows; only Wayland's
+/// `wp_viewport` can do this, so elsewhere a held size would fight the window
+/// manager — apply sizes immediately.
+fn canHoldResize(self: *@This()) bool {
+    if (comptime @hasDecl(wio.backend, "active")) {
+        return switch (wio.backend.active) {
+            .wayland => self.window.backend.wayland.viewport != null,
+            .x11 => false,
+        };
+    }
+    return false;
+}
+
+/// Fold a reported window size into the hold-off. The first logical and first
+/// physical size apply immediately (each arrives as its own event on the first
+/// configure); after that a size is held until the drag settles.
+fn noteResize(self: *@This(), natural: ?dvui.Size.Natural, physical: ?dvui.Size.Physical) void {
+    if (!self.canHoldResize()) {
+        if (natural) |s| self.size_natural = s;
+        if (physical) |s| self.size_physical = s;
+        return;
+    }
+    var held = false;
+    if (natural) |s| {
+        if (self.seen_natural) {
+            self.pending_natural = s;
+            held = true;
+        } else {
+            self.size_natural = s;
+            self.seen_natural = true;
+        }
+    }
+    if (physical) |s| {
+        if (self.seen_physical) {
+            self.pending_physical = s;
+            held = true;
+        } else {
+            self.size_physical = s;
+            self.seen_physical = true;
+        }
+    }
+    if (held) {
+        self.resize_deadline_ns = self.nanoTime() + resize_settle_ns;
+        // Wake the loop at the settle deadline even if no further events arrive.
+        self.refresh();
+    }
 }
 
 pub fn contentScale(self: *@This()) f32 {
@@ -178,11 +270,20 @@ pub fn windowClose(self: *@This(), _: *dvui.Window) void {
     self.window.closeWindow();
 }
 
-pub fn waitEventTimeout(_: *@This(), timeout_us: u32) void {
-    if (timeout_us == std.math.maxInt(u32)) {
+pub fn waitEventTimeout(self: *@This(), timeout_us: u32) void {
+    var t = timeout_us;
+    if (self.pending_natural != null or self.pending_physical != null) {
+        const remaining = self.resize_deadline_ns - self.nanoTime();
+        const remaining_us: u32 = if (remaining <= 0)
+            0
+        else
+            @intCast(@min(@divTrunc(remaining, std.time.ns_per_us), std.math.maxInt(u32)));
+        t = @min(t, remaining_us);
+    }
+    if (t == std.math.maxInt(u32)) {
         wio.wait(.{});
     } else {
-        wio.wait(.{ .timeout_ns = @as(u64, timeout_us) * std.time.ns_per_us });
+        wio.wait(.{ .timeout_ns = @as(u64, t) * std.time.ns_per_us });
     }
 }
 
@@ -237,11 +338,11 @@ pub fn addEvent(self: *@This(), win: *dvui.Window, event: wio.Event) !bool {
             return false;
         },
         .size_logical => |size| {
-            self.size_natural = .{ .w = size.width, .h = size.height };
+            self.noteResize(.{ .w = size.width, .h = size.height }, null);
             return false;
         },
         .size_physical => |size| {
-            self.size_physical = .{ .w = size.width, .h = size.height };
+            self.noteResize(null, .{ .w = size.width, .h = size.height });
             return false;
         },
         .scale => |scale| {
