@@ -265,7 +265,7 @@ pub fn init(allocator: std.mem.Allocator, window: *wio.Window, options: InitOpti
     };
     self.readback_submit_context = readback_submit_context;
 
-    try self.createSwapchain(sizeToExtent(options.size_physical), .null_handle);
+    try self.createSwapchain(sizeToExtent(options.size_physical));
     if (options.depth_format) |format| try validateDepthFormat(resources.instance, resources.physical_device, format);
     if (options.rendering == .render_pass) {
         self.render_pass = try createRenderPass(resources.device, self.color_format, options.depth_format, options.vk_alloc);
@@ -788,23 +788,13 @@ fn recreate(self: *@This(), requested: vk.Extent2D) !void {
     if (requested.width == 0 or requested.height == 0) return;
     try self.device.deviceWaitIdle();
     self.destroyFramebuffers();
-    // Keep the old swapchain (and its image views) alive until the replacement
-    // exists: `oldSwapchain` lets the driver hand off rather than tear down
-    // first, which is what makes this cheap enough to run while resizing.
-    const old_swapchain = self.swapchain;
-    const old_views = self.image_views;
-    self.swapchain = .null_handle;
-    self.image_views = &.{};
     self.destroySwapchain();
-    try self.createSwapchain(requested, old_swapchain);
-    for (old_views) |view| if (view != .null_handle) self.device.destroyImageView(view, self.vk_alloc);
-    if (old_views.len != 0) self.allocator.free(old_views);
-    if (old_swapchain != .null_handle) self.device.destroySwapchainKHR(old_swapchain, self.vk_alloc);
+    try self.createSwapchain(requested);
     try self.createFramebuffers();
     self.needs_recreate = false;
 }
 
-fn createSwapchain(self: *@This(), requested: vk.Extent2D, old_swapchain: vk.SwapchainKHR) !void {
+fn createSwapchain(self: *@This(), requested: vk.Extent2D) !void {
     const capabilities = try self.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(self.physical_device, self.surface);
     if (!capabilities.supported_usage_flags.contains(self.swapchain_image_usage)) return error.UnsupportedSwapchainImageUsage;
     self.extent = if (capabilities.current_extent.width != std.math.maxInt(u32)) capabilities.current_extent else .{
@@ -842,7 +832,6 @@ fn createSwapchain(self: *@This(), requested: vk.Extent2D, old_swapchain: vk.Swa
     const family_indices = [_]u32{ self.queue_families.graphics, self.queue_families.present };
     self.swapchain = try self.device.createSwapchainKHR(&.{
         .surface = self.surface,
-        .old_swapchain = old_swapchain,
         .min_image_count = image_count,
         .image_format = self.color_format,
         .image_color_space = self.color_space,
