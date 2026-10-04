@@ -206,6 +206,14 @@ swapchain_generation: u64 = 0,
 vsync: bool,
 transparent: bool = false,
 needs_recreate: bool = false,
+/// Cached surface queries. `getPhysicalDeviceSurfaceFormats` and
+/// `getPhysicalDeviceSurfacePresentModes` cost ~0.9 ms combined on some
+/// drivers and only change on a monitor / vsync change, so a burst of resize
+/// recreates reuses the last query and re-queries once the burst pauses.
+surface_format: ?vk.SurfaceFormatKHR = null,
+surface_present_mode: ?vk.PresentModeKHR = null,
+surface_query_us: i64 = 0,
+surface_query_vsync: bool = false,
 frame_active: bool = false,
 dvui_frame_active: bool = false,
 previous_stats: RenderStats = .{},
@@ -257,7 +265,7 @@ pub fn init(allocator: std.mem.Allocator, window: *wio.Window, options: InitOpti
     };
     self.readback_submit_context = readback_submit_context;
 
-    try self.createSwapchain(sizeToExtent(options.size_physical));
+    try self.createSwapchain(sizeToExtent(options.size_physical), .null_handle);
     if (options.depth_format) |format| try validateDepthFormat(resources.instance, resources.physical_device, format);
     if (options.rendering == .render_pass) {
         self.render_pass = try createRenderPass(resources.device, self.color_format, options.depth_format, options.vk_alloc);
@@ -764,32 +772,69 @@ pub fn renderTarget(self: *@This(), texture: ?dvui.TextureTarget) dvui.Backend.G
     return self.renderer.renderTarget(texture) catch |err| return mapGenericError(err);
 }
 
+/// How long a surface-format/present-mode query stays valid for reuse. A
+/// resize drag recreates the swapchain many times a second; reusing the query
+/// across the burst saves the per-frame cost, and re-querying once it pauses
+/// still picks up a monitor or vsync change.
+const surface_query_reuse_us: i64 = 1 * std.time.us_per_s;
+
+fn nowUs() i64 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    return @as(i64, @intCast(ts.sec)) * std.time.us_per_s + @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_us);
+}
+
 fn recreate(self: *@This(), requested: vk.Extent2D) !void {
     if (requested.width == 0 or requested.height == 0) return;
     try self.device.deviceWaitIdle();
     self.destroyFramebuffers();
+    // Keep the old swapchain (and its image views) alive until the replacement
+    // exists: `oldSwapchain` lets the driver hand off rather than tear down
+    // first, which is what makes this cheap enough to run while resizing.
+    const old_swapchain = self.swapchain;
+    const old_views = self.image_views;
+    self.swapchain = .null_handle;
+    self.image_views = &.{};
     self.destroySwapchain();
-    try self.createSwapchain(requested);
+    try self.createSwapchain(requested, old_swapchain);
+    for (old_views) |view| if (view != .null_handle) self.device.destroyImageView(view, self.vk_alloc);
+    if (old_views.len != 0) self.allocator.free(old_views);
+    if (old_swapchain != .null_handle) self.device.destroySwapchainKHR(old_swapchain, self.vk_alloc);
     try self.createFramebuffers();
     self.needs_recreate = false;
 }
 
-fn createSwapchain(self: *@This(), requested: vk.Extent2D) !void {
+fn createSwapchain(self: *@This(), requested: vk.Extent2D, old_swapchain: vk.SwapchainKHR) !void {
     const capabilities = try self.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(self.physical_device, self.surface);
     if (!capabilities.supported_usage_flags.contains(self.swapchain_image_usage)) return error.UnsupportedSwapchainImageUsage;
     self.extent = if (capabilities.current_extent.width != std.math.maxInt(u32)) capabilities.current_extent else .{
         .width = std.math.clamp(requested.width, capabilities.min_image_extent.width, capabilities.max_image_extent.width),
         .height = std.math.clamp(requested.height, capabilities.min_image_extent.height, capabilities.max_image_extent.height),
     };
-    const formats = try self.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(self.physical_device, self.surface, self.allocator);
-    defer self.allocator.free(formats);
-    const selected_format = chooseColorFormat(formats, if (self.color_format == .undefined) self.preferred_formats else &.{self.color_format});
+    const now = nowUs();
+    const reuse_query = self.surface_format != null and self.surface_present_mode != null and
+        self.surface_query_vsync == self.vsync and now - self.surface_query_us < surface_query_reuse_us;
+    var selected_format: vk.SurfaceFormatKHR = undefined;
+    var present_mode: vk.PresentModeKHR = undefined;
+    if (reuse_query) {
+        selected_format = self.surface_format.?;
+        present_mode = self.surface_present_mode.?;
+    } else {
+        const formats = try self.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(self.physical_device, self.surface, self.allocator);
+        defer self.allocator.free(formats);
+        selected_format = chooseColorFormat(formats, if (self.color_format == .undefined) self.preferred_formats else &.{self.color_format});
+        const modes = try self.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(self.physical_device, self.surface, self.allocator);
+        defer self.allocator.free(modes);
+        present_mode = choosePresentMode(modes, self.vsync);
+        self.surface_format = selected_format;
+        self.surface_present_mode = present_mode;
+        self.surface_query_us = now;
+        self.surface_query_vsync = self.vsync;
+    }
     if (self.color_format != .undefined and selected_format.format != self.color_format) return error.SurfaceFormatChanged;
     self.color_format = selected_format.format;
     self.color_space = selected_format.color_space;
 
-    const modes = try self.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(self.physical_device, self.surface, self.allocator);
-    defer self.allocator.free(modes);
     const image_count = if (capabilities.max_image_count == 0)
         capabilities.min_image_count + 1
     else
@@ -797,6 +842,7 @@ fn createSwapchain(self: *@This(), requested: vk.Extent2D) !void {
     const family_indices = [_]u32{ self.queue_families.graphics, self.queue_families.present };
     self.swapchain = try self.device.createSwapchainKHR(&.{
         .surface = self.surface,
+        .old_swapchain = old_swapchain,
         .min_image_count = image_count,
         .image_format = self.color_format,
         .image_color_space = self.color_space,
@@ -808,7 +854,7 @@ fn createSwapchain(self: *@This(), requested: vk.Extent2D) !void {
         .p_queue_family_indices = if (self.queue_families.graphics == self.queue_families.present) null else &family_indices,
         .pre_transform = capabilities.current_transform,
         .composite_alpha = chooseCompositeAlpha(capabilities.supported_composite_alpha, self.transparent),
-        .present_mode = choosePresentMode(modes, self.vsync),
+        .present_mode = present_mode,
         .clipped = .true,
     }, self.vk_alloc);
     errdefer self.destroySwapchain();
