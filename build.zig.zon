@@ -40,8 +40,10 @@
             .lazy = true,
         },
         .wio = .{
-            .url = "git+https://github.com/ypsvlq/wio.git#e923d9051d2fae9125bcd3b255cea7f28105dcb3",
-            .hash = "wio-0.0.0-8xHrr3oTCAAXDVug4r82SZYOjCKJUdLU2JlUrwjCQee_",
+            // flyewic/wio-zol `zig-0.17`: ypsvlq/wio master (Zig 0.17) plus the
+            // zol window-control / client-side-decoration / key_text patches.
+            .url = "git+https://github.com/flyewic/wio-zol#f0e20d3731f463dd89a1d757a034a8ac79cb337e",
+            .hash = "wio-0.0.0-8xHrr0SnCADtQArb7gltTlTRwH33qy5-brtx_7nSiVfj",
             .lazy = true,
         },
         .opengl = .{
@@ -50,8 +52,12 @@
             .lazy = true,
         },
         .vulkan = .{
-            .url = "git+https://github.com/Snektron/vulkan-zig#b496a6a561ffbbeb530b0f9ed4e059f88c0723a5",
-            .hash = "vulkan-0.0.0-r7Ytx7N9AwD7IZt5_XNHtkJ4G9qY0pCH-cpcOsbL8wzD",
+            // 0.17: `ff62f6e` fixes the generator's `Ast.parse` mode arg
+            // (`b496a6a` predates `ParseOptions.mode`). Its generated flag
+            // fields drop the `_bit` suffix; the vulkan backend call sites were
+            // renamed to match (still keeps `null_handle` handles).
+            .url = "git+https://github.com/Snektron/vulkan-zig#ff62f6efc7b966f91c0b4ea7a2394c8cca7892e5",
+            .hash = "vulkan-0.0.0-r7Ytx_6DAwDB1QJAbIew5IzR2PiiAtJENX5kdJHf449X",
             .lazy = true,
         },
         .vulkan_headers = .{
